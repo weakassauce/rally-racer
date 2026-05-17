@@ -29,7 +29,9 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
 });
 
-buildWorld(scene);
+// World is built up-front; tree / rock GLBs are swapped in later by loading
+// the file and rebuilding the scene (cheap since terrain mesh dominates).
+let world = buildWorld(scene);
 const track = buildTrack(scene);
 
 // Car at start, heading along the track's initial tangent
@@ -44,7 +46,8 @@ function spawnAtStart() {
 }
 spawnAtStart();
 
-const wheelTune = { lateral: 0.40, longitudinal: 0.30, diameter: 0.72, yLift: 0.02 };
+// WRX-ish proportions: track ~1.46/1.78 ≈ 0.41, wheelbase ~2.62/4.6 ≈ 0.285
+const wheelTune = { lateral: 0.41, longitudinal: 0.285, diameter: 0.66, yLift: -0.02 };
 window.wheelTune = wheelTune;
 window.applyWheels = () => reAttachWheels();
 let wheelTemplateGLB = null;
@@ -99,6 +102,53 @@ tryLoadGLB('/assets/wheel.glb').then((g) => {
   wheelTemplateGLB = g;
   reAttachWheels();
 });
+
+// Async foliage / rock GLB swaps. When either lands we discard the current
+// scatter group and rebuild with the template. (Tree+rock counts are small
+// enough that this rebuild is fine.)
+let treeTemplate = null;
+let rockTemplate = null;
+function rebuildScatter() {
+  if (world.trees && world.trees.root) scene.remove(world.trees.root);
+  if (world.rocks && world.rocks.root) scene.remove(world.rocks.root);
+  // For procedural fallback the trees/rocks aren't in a tagged root, but we
+  // also already scattered them once; rebuilding always for simplicity.
+  // (The terrain mesh and lights stay.)
+  // Re-run scatter only — terrain etc. already in scene from initial buildWorld.
+  // Easiest: leave initial procedural scatter alone if template is null;
+  // otherwise we add the GLB scatter on top and leave the procedural as a
+  // fallback layer (they're cheap relative to the GLBs).
+  world = buildWorld(scene, { treeTemplate, rockTemplate });
+}
+tryLoadGLB('/assets/tree.glb').then((g) => { if (g) { treeTemplate = normalizeFoliage(g, 'tree'); rebuildScatter(); } });
+tryLoadGLB('/assets/rock.glb').then((g) => { if (g) { rockTemplate = normalizeFoliage(g, 'rock'); rebuildScatter(); } });
+
+function normalizeFoliage(root, kind) {
+  const box = new THREE.Box3().setFromObject(root);
+  const center = box.getCenter(new THREE.Vector3());
+  // Re-center on origin (XZ), lift so bottom touches y=0
+  root.position.sub(center);
+  root.position.y += (box.max.y - box.min.y) / 2;
+  // Light material tweaks so foliage doesn't look plasticky
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = false;
+    o.receiveShadow = false;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!m) continue;
+      if (kind === 'tree') {
+        if ('roughness' in m) m.roughness = 0.9;
+        if ('metalness' in m) m.metalness = 0;
+      } else if (kind === 'rock') {
+        if ('roughness' in m) m.roughness = 0.95;
+        if ('metalness' in m) m.metalness = 0.05;
+      }
+      m.needsUpdate = true;
+    }
+  });
+  return root;
+}
 tryLoadGLB('/assets/player_car.glb').then((g) => {
   if (!g) return;
   car.mesh.clear();
@@ -135,6 +185,32 @@ function frame(now) {
   }
   if (!finished) {
     car.update(dt, controls);
+
+    // Collision against scattered trees + rocks (nearest neighbours only)
+    const carR = 1.4;
+    const checkR2 = 50 * 50; // narrow phase radius squared
+    const checkColliders = (list) => {
+      for (const o of list) {
+        const dx = car.position.x - o.x;
+        const dz = car.position.z - o.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > checkR2) continue;
+        const minD = carR + o.radius;
+        if (d2 < minD * minD) {
+          const d = Math.sqrt(d2) || 1;
+          // Push car out to just outside collider
+          const push = (minD - d) / d;
+          car.position.x += dx * push;
+          car.position.z += dz * push;
+          // Bounce + speed loss
+          car.velocity.multiplyScalar(0.35);
+          car.takeImpact();
+        }
+      }
+    };
+    if (world.trees) checkColliders(world.trees.positions);
+    if (world.rocks) checkColliders(world.rocks.positions);
+
     if (!startedRun && car.speed() > 1) startedRun = true;
     if (startedRun) elapsed += dt;
     if (distanceToFinish() < TRACK.finishRadius) finished = true;

@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { WORLD } from './config.js';
 
 // Shared heightmap function — used by terrain mesh, track path, vegetation.
-// Multi-layer hills + sin ridges + low-frequency rolling for variety.
 export function terrainHeight(x, z) {
   const a = Math.sin(x * 0.0042) * Math.cos(z * 0.0036) * WORLD.heightAmplitude;
   const b = Math.cos(x * 0.0011) * Math.sin(z * 0.0017) * (WORLD.heightAmplitude * 0.7);
@@ -11,64 +10,37 @@ export function terrainHeight(x, z) {
   return a + b + c + d;
 }
 
-export function buildWorld(scene) {
-  scene.background = makeSkyTexture();
-  scene.fog = new THREE.Fog(WORLD.fogColor, WORLD.fogNear, WORLD.fogFar);
-
-  // Sun + hemi
-  const sun = new THREE.DirectionalLight(0xfff2c8, 1.05);
-  sun.position.set(...WORLD.sunDir).normalize().multiplyScalar(500);
-  scene.add(sun);
-  scene.add(new THREE.HemisphereLight(0xcbe2ff, 0x39301c, 0.55));
-
-  // Terrain
-  const segs = WORLD.terrainSegments;
-  const geo = new THREE.PlaneGeometry(WORLD.terrainSize, WORLD.terrainSize, segs, segs);
-  geo.rotateX(-Math.PI / 2);
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    pos.setY(i, terrainHeight(pos.getX(i), pos.getZ(i)));
+// Procedural grass canvas texture: green base with speckle noise. Tiles
+// across the terrain so each chunk of ground gets visible variation.
+function makeGrassTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  // Base green
+  ctx.fillStyle = '#4d5d2c';
+  ctx.fillRect(0, 0, 256, 256);
+  // Speckle: ~6000 short strokes of darker / lighter green
+  for (let i = 0; i < 6000; i++) {
+    const x = Math.random() * 256;
+    const y = Math.random() * 256;
+    const v = (Math.random() - 0.5) * 32;
+    const r = 51 + v, g = 76 + v, b = 28 + v;
+    ctx.fillStyle = `rgb(${r|0},${g|0},${b|0})`;
+    ctx.fillRect(x, y, 1.5, 1.5);
   }
-  geo.computeVertexNormals();
-
-  // Vertex coloring: dirt brown below 0, grass green near 0, mossy brown on ridges, stone above
-  const colors = new Float32Array(pos.count * 3);
-  const cValley = new THREE.Color(0x46532a);
-  const cGrass  = new THREE.Color(0x5a6b3a);
-  const cRock   = new THREE.Color(0x6c6657);
-  const cSnow   = new THREE.Color(0xd8dcd2);
-  const tmpA = new THREE.Color(), tmpB = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    const h = pos.getY(i);
-    let col;
-    if (h < 8) {
-      const t = THREE.MathUtils.clamp((h + 30) / 38, 0, 1);
-      col = tmpA.copy(cValley).lerp(cGrass, t);
-    } else if (h < 40) {
-      const t = THREE.MathUtils.clamp((h - 8) / 32, 0, 1);
-      col = tmpA.copy(cGrass).lerp(cRock, t);
-    } else {
-      const t = THREE.MathUtils.clamp((h - 40) / 30, 0, 1);
-      col = tmpB.copy(cRock).lerp(cSnow, t);
-    }
-    colors[i * 3 + 0] = col.r;
-    colors[i * 3 + 1] = col.g;
-    colors[i * 3 + 2] = col.b;
+  // Occasional brighter blades
+  for (let i = 0; i < 800; i++) {
+    const x = Math.random() * 256;
+    const y = Math.random() * 256;
+    ctx.fillStyle = `rgba(160, 180, 90, ${0.3 + Math.random() * 0.35})`;
+    ctx.fillRect(x, y, 1, 2);
   }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-  const groundMat = new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: 0.92, flatShading: true,
-  });
-  const ground = new THREE.Mesh(geo, groundMat);
-  scene.add(ground);
-
-  // Trees — InstancedMesh of cone leaves + cylinder trunks. Place by sampling
-  // terrain height; skip very-high (snow line) and very-low (mud puddles).
-  scatterTrees(scene);
-  scatterRocks(scene);
-
-  return { ground };
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.repeat.set(WORLD.terrainSize / 18, WORLD.terrainSize / 18);
+  tex.anisotropy = 4;
+  return tex;
 }
 
 function makeSkyTexture() {
@@ -86,7 +58,109 @@ function makeSkyTexture() {
   return t;
 }
 
-function scatterTrees(scene) {
+export function buildWorld(scene, { treeTemplate = null, rockTemplate = null } = {}) {
+  scene.background = makeSkyTexture();
+  scene.fog = new THREE.Fog(WORLD.fogColor, WORLD.fogNear, WORLD.fogFar);
+
+  // Sun + hemi
+  const sun = new THREE.DirectionalLight(0xfff2c8, 1.05);
+  sun.position.set(...WORLD.sunDir).normalize().multiplyScalar(500);
+  scene.add(sun);
+  scene.add(new THREE.HemisphereLight(0xcbe2ff, 0x39301c, 0.55));
+
+  // Terrain
+  const segs = WORLD.terrainSegments;
+  const geo = new THREE.PlaneGeometry(WORLD.terrainSize, WORLD.terrainSize, segs, segs);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position;
+  const uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setY(i, terrainHeight(pos.getX(i), pos.getZ(i)));
+  }
+  geo.computeVertexNormals();
+
+  // Vertex coloring: dirt/grass/rock/snow zones tint the texture
+  const colors = new Float32Array(pos.count * 3);
+  const cValley = new THREE.Color(0x7d8a52);
+  const cGrass  = new THREE.Color(0xa3b075);
+  const cRock   = new THREE.Color(0x9a9180);
+  const cSnow   = new THREE.Color(0xeae9e3);
+  const tmpA = new THREE.Color(), tmpB = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const h = pos.getY(i);
+    let col;
+    if (h < 8) {
+      col = tmpA.copy(cValley).lerp(cGrass, THREE.MathUtils.clamp((h + 30) / 38, 0, 1));
+    } else if (h < 40) {
+      col = tmpA.copy(cGrass).lerp(cRock, THREE.MathUtils.clamp((h - 8) / 32, 0, 1));
+    } else {
+      col = tmpB.copy(cRock).lerp(cSnow, THREE.MathUtils.clamp((h - 40) / 30, 0, 1));
+    }
+    colors[i * 3 + 0] = col.r;
+    colors[i * 3 + 1] = col.g;
+    colors[i * 3 + 2] = col.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const grassTex = makeGrassTexture();
+  const groundMat = new THREE.MeshStandardMaterial({
+    map: grassTex,
+    vertexColors: true,
+    roughness: 0.95,
+    flatShading: false,
+  });
+  const ground = new THREE.Mesh(geo, groundMat);
+  scene.add(ground);
+
+  const trees = scatterTrees(scene, treeTemplate);
+  const rocks = scatterRocks(scene, rockTemplate);
+
+  return { ground, trees, rocks };
+}
+
+// Returns { instances: InstancedMesh[], positions: [{x,z,y,radius}] }
+function scatterTrees(scene, template) {
+  const positions = [];
+  const count = WORLD.treeCount;
+  const half = WORLD.terrainSize * 0.48;
+  let placed = 0, tries = 0;
+  while (placed < count && tries < count * 6) {
+    tries++;
+    const x = (Math.random() * 2 - 1) * half;
+    const z = (Math.random() * 2 - 1) * half;
+    const y = terrainHeight(x, z);
+    if (y < -10 || y > 45) continue;
+    positions.push({ x, y, z, scale: 0.85 + Math.random() * 1.6, rot: Math.random() * Math.PI * 2, radius: 1.8 });
+    placed++;
+  }
+
+  if (template) {
+    // Real tree GLB — clone per instance (we keep collision radius)
+    const sample = template.clone(true);
+    const tb = new THREE.Box3().setFromObject(sample);
+    const tSize = tb.getSize(new THREE.Vector3());
+    const tMaxAxis = Math.max(tSize.x, tSize.y, tSize.z) || 1;
+    const targetHeight = 10;
+    const sScale = targetHeight / tMaxAxis;
+
+    // Build per-instance Group rather than InstancedMesh because the template
+    // may be a hierarchy of meshes with different materials.
+    const root = new THREE.Group();
+    for (const p of positions) {
+      const inst = template.clone(true);
+      inst.position.set(p.x, p.y, p.z);
+      inst.rotation.y = p.rot;
+      inst.scale.setScalar(sScale * p.scale);
+      // Lift so the trunk base sits on ground (template is centered after normalize)
+      const lift = tSize.y * sScale * p.scale * 0.5;
+      inst.position.y += lift;
+      root.add(inst);
+    }
+    scene.add(root);
+    return { positions, root };
+  }
+
+  // Procedural fallback (cone + cylinder)
   const trunkGeo  = new THREE.CylinderGeometry(0.32, 0.5, 5, 6);
   trunkGeo.translate(0, 2.5, 0);
   const leavesGeo = new THREE.ConeGeometry(2.4, 7, 7);
@@ -94,52 +168,68 @@ function scatterTrees(scene) {
   const trunkMat  = new THREE.MeshStandardMaterial({ color: WORLD.trunkColor, roughness: 0.95, flatShading: true });
   const leavesMat = new THREE.MeshStandardMaterial({ color: WORLD.leafColor,  roughness: 0.85, flatShading: true });
 
-  const count = WORLD.treeCount;
   const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, count);
   const leaves = new THREE.InstancedMesh(leavesGeo, leavesMat, count);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const s = new THREE.Vector3();
-  const half = WORLD.terrainSize * 0.48;
-  let placed = 0, tries = 0;
-  while (placed < count && tries < count * 6) {
-    tries++;
-    const x = (Math.random() * 2 - 1) * half;
-    const z = (Math.random() * 2 - 1) * half;
-    const y = (function () { return (typeof terrainHeight === 'function') ? terrainHeight(x, z) : 0; })();
-    if (y < -10 || y > 45) continue;
-    const scale = 0.85 + Math.random() * 1.6;
-    s.set(scale, scale, scale);
-    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI * 2);
-    m.compose(new THREE.Vector3(x, y, z), q, s);
-    trunks.setMatrixAt(placed, m);
-    leaves.setMatrixAt(placed, m);
-    placed++;
-  }
-  trunks.count = placed;
-  leaves.count = placed;
+  positions.forEach((p, i) => {
+    s.set(p.scale, p.scale, p.scale);
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rot);
+    m.compose(new THREE.Vector3(p.x, p.y, p.z), q, s);
+    trunks.setMatrixAt(i, m);
+    leaves.setMatrixAt(i, m);
+  });
+  trunks.count = positions.length;
+  leaves.count = positions.length;
   trunks.instanceMatrix.needsUpdate = true;
   leaves.instanceMatrix.needsUpdate = true;
   scene.add(trunks);
   scene.add(leaves);
+  return { positions };
 }
 
-function scatterRocks(scene) {
-  const geo = new THREE.IcosahedronGeometry(1.2, 0);
-  const mat = new THREE.MeshStandardMaterial({ color: WORLD.rockColor, roughness: 0.95, flatShading: true });
-  const inst = new THREE.InstancedMesh(geo, mat, WORLD.rockCount);
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
+function scatterRocks(scene, template) {
+  const positions = [];
   const half = WORLD.terrainSize * 0.46;
   for (let i = 0; i < WORLD.rockCount; i++) {
     const x = (Math.random() * 2 - 1) * half;
     const z = (Math.random() * 2 - 1) * half;
     const y = terrainHeight(x, z);
     const scale = 1 + Math.random() * 2.4;
-    q.setFromEuler(new THREE.Euler(Math.random() * 0.6, Math.random() * Math.PI * 2, Math.random() * 0.6));
-    m.compose(new THREE.Vector3(x, y + scale * 0.3, z), q, new THREE.Vector3(scale, scale * 0.7, scale));
-    inst.setMatrixAt(i, m);
+    positions.push({ x, y, z, scale, rot: Math.random() * Math.PI * 2, radius: 1.0 + scale * 0.4 });
   }
+
+  if (template) {
+    const tb = new THREE.Box3().setFromObject(template);
+    const tSize = tb.getSize(new THREE.Vector3());
+    const tMaxAxis = Math.max(tSize.x, tSize.y, tSize.z) || 1;
+    const baseScale = 2.2 / tMaxAxis;
+    const root = new THREE.Group();
+    for (const p of positions) {
+      const inst = template.clone(true);
+      inst.position.set(p.x, p.y, p.z);
+      inst.rotation.y = p.rot;
+      inst.scale.setScalar(baseScale * p.scale);
+      inst.position.y += tSize.y * baseScale * p.scale * 0.25;
+      root.add(inst);
+    }
+    scene.add(root);
+    return { positions, root };
+  }
+
+  // Procedural fallback
+  const geo = new THREE.IcosahedronGeometry(1.2, 0);
+  const mat = new THREE.MeshStandardMaterial({ color: WORLD.rockColor, roughness: 0.95, flatShading: true });
+  const inst = new THREE.InstancedMesh(geo, mat, positions.length);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  positions.forEach((p, i) => {
+    q.setFromEuler(new THREE.Euler(Math.random() * 0.6, p.rot, Math.random() * 0.6));
+    m.compose(new THREE.Vector3(p.x, p.y + p.scale * 0.3, p.z), q, new THREE.Vector3(p.scale, p.scale * 0.7, p.scale));
+    inst.setMatrixAt(i, m);
+  });
   inst.instanceMatrix.needsUpdate = true;
   scene.add(inst);
+  return { positions };
 }

@@ -2,6 +2,40 @@ import * as THREE from 'three';
 import { TRACK } from './config.js';
 import { terrainHeight } from './world.js';
 
+function makeDirtTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  // Sandy-brown base
+  ctx.fillStyle = '#9a8460';
+  ctx.fillRect(0, 0, 256, 256);
+  // Pebble speckle
+  for (let i = 0; i < 8000; i++) {
+    const x = Math.random() * 256, y = Math.random() * 256;
+    const v = (Math.random() - 0.5) * 40;
+    const r = 154 + v, g = 132 + v, b = 96 + v;
+    ctx.fillStyle = `rgb(${r|0},${g|0},${b|0})`;
+    ctx.fillRect(x, y, 1.4, 1.4);
+  }
+  // Tire grooves: two slightly darker bands running U direction (drift hint)
+  ctx.fillStyle = 'rgba(60, 50, 36, 0.18)';
+  ctx.fillRect(82, 0, 12, 256);
+  ctx.fillRect(162, 0, 12, 256);
+  // Occasional pebbles
+  for (let i = 0; i < 60; i++) {
+    const x = Math.random() * 256, y = Math.random() * 256;
+    const r = 1 + Math.random() * 2.6;
+    ctx.fillStyle = `rgba(50, 38, 22, ${0.35 + Math.random() * 0.4})`;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.repeat.set(1, 1); // road UVs already tile along length
+  tex.anisotropy = 4;
+  return tex;
+}
+
 // Build a winding gravel road from the waypoint list. Returns a CatmullRom
 // curve so the player car spawn + camera can sample it.
 export function buildTrack(scene) {
@@ -56,7 +90,8 @@ export function buildTrack(scene) {
   geo.setIndex(ribbonIndices);
 
   const mat = new THREE.MeshStandardMaterial({
-    color: 0x8a7a5e, roughness: 0.96, metalness: 0,
+    map: makeDirtTexture(),
+    color: 0xb19878, roughness: 0.97, metalness: 0,
   });
   const road = new THREE.Mesh(geo, mat);
   scene.add(road);

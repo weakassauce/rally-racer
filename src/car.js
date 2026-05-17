@@ -176,16 +176,38 @@ export class Car {
     const groundY = terrainHeight(this.position.x, this.position.z);
     this.position.y = groundY + 0.05;
 
-    // Pitch/roll the body slightly with terrain slope (sample 4 points)
-    const dxA = terrainHeight(this.position.x + 1, this.position.z) - groundY;
-    const dxB = terrainHeight(this.position.x - 1, this.position.z) - groundY;
-    const dzA = terrainHeight(this.position.x, this.position.z + 1) - groundY;
-    const dzB = terrainHeight(this.position.x, this.position.z - 1) - groundY;
-    const tiltX = Math.atan2(dzA - dzB, 2); // pitch
-    const tiltZ = -Math.atan2(dxA - dxB, 2); // roll (right wheel low → +roll right)
+    // Pitch + roll from terrain slope. Sample 4 points spaced by the car's
+    // wheelbase / track so the slope reflects actual under-wheel terrain.
+    const fwdN = newFwd;
+    const rightN = newRight;
+    const halfLen = CAR.length * 0.42;
+    const halfWid = CAR.width  * 0.42;
+    const xF = this.position.x + fwdN.x * halfLen;
+    const zF = this.position.z + fwdN.z * halfLen;
+    const xB = this.position.x - fwdN.x * halfLen;
+    const zB = this.position.z - fwdN.z * halfLen;
+    const xR = this.position.x + rightN.x * halfWid;
+    const zR = this.position.z + rightN.z * halfWid;
+    const xL = this.position.x - rightN.x * halfWid;
+    const zL = this.position.z - rightN.z * halfWid;
+    const yF = terrainHeight(xF, zF);
+    const yB = terrainHeight(xB, zB);
+    const yR = terrainHeight(xR, zR);
+    const yL = terrainHeight(xL, zL);
+    // Pitch around right axis: front goes up = positive pitch (nose up)
+    const pitch = Math.atan2(yB - yF, halfLen * 2);
+    // Roll around forward axis: right side up = positive roll
+    const roll  = Math.atan2(yR - yL, halfWid * 2);
+
+    // Smooth so the body doesn't snap on crests; blend toward instantaneous
+    this._tiltPitch = (this._tiltPitch ?? 0) + (pitch - (this._tiltPitch ?? 0)) * Math.min(1, dt * 8);
+    this._tiltRoll  = (this._tiltRoll  ?? 0) + (roll  - (this._tiltRoll  ?? 0)) * Math.min(1, dt * 8);
 
     this.mesh.position.copy(this.position);
-    this.mesh.rotation.set(tiltX, this.heading, tiltZ);
+    // Build a CFrame-style rotation: heading (yaw) then pitch then roll, body
+    // frame. We need YXZ order so the slope tilts are applied AFTER yaw.
+    this.mesh.rotation.order = 'YXZ';
+    this.mesh.rotation.set(this._tiltPitch, this.heading, this._tiltRoll);
 
     // Wheels
     if (this.wheels.length > 0) {

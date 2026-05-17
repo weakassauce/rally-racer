@@ -76,9 +76,9 @@ export const CAR = {
   steerLerp: 8,
   yawAtRest: 58,
   yawHalfSpeed: 26,          // tighter low-speed steering for hairpins
-  // Grip / drift — looser than tarmac so gravel slides
-  lateralGrip: 4.0,
-  handbrakeGripMul: 0.12,
+  // Grip / drift — gravel is much looser than tarmac so the back end steps out
+  lateralGrip: 2.2,
+  handbrakeGripMul: 0.10,
   throttleResponse: 0.55,
   maxHull: 100,
   // Body
