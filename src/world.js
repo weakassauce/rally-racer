@@ -135,39 +135,18 @@ function scatterTrees(scene, template) {
   }
 
   if (template) {
-    // Real tree GLB — clone per instance (we keep collision radius)
-    const sample = template.clone(true);
-    const tb = new THREE.Box3().setFromObject(sample);
-    const tSize = tb.getSize(new THREE.Vector3());
-    const tMaxAxis = Math.max(tSize.x, tSize.y, tSize.z) || 1;
-    const targetHeight = 10;
-    const sScale = targetHeight / tMaxAxis;
-
-    // Build per-instance Group rather than InstancedMesh because the template
-    // may be a hierarchy of meshes with different materials.
-    const root = new THREE.Group();
-    for (const p of positions) {
-      const inst = template.clone(true);
-      inst.position.set(p.x, p.y, p.z);
-      inst.rotation.y = p.rot;
-      inst.scale.setScalar(sScale * p.scale);
-      // Lift so the trunk base sits on ground (template is centered after normalize)
-      const lift = tSize.y * sScale * p.scale * 0.5;
-      inst.position.y += lift;
-      root.add(inst);
-    }
+    const root = instanceTemplate(template, positions, 10);
     scene.add(root);
     return { positions, root };
   }
 
-  // Procedural fallback (cone + cylinder)
+  // Procedural fallback (cone + cylinder), still instanced
   const trunkGeo  = new THREE.CylinderGeometry(0.32, 0.5, 5, 6);
   trunkGeo.translate(0, 2.5, 0);
   const leavesGeo = new THREE.ConeGeometry(2.4, 7, 7);
   leavesGeo.translate(0, 8.5, 0);
   const trunkMat  = new THREE.MeshStandardMaterial({ color: WORLD.trunkColor, roughness: 0.95, flatShading: true });
   const leavesMat = new THREE.MeshStandardMaterial({ color: WORLD.leafColor,  roughness: 0.85, flatShading: true });
-
   const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, count);
   const leaves = new THREE.InstancedMesh(leavesGeo, leavesMat, count);
   const m = new THREE.Matrix4();
@@ -201,24 +180,11 @@ function scatterRocks(scene, template) {
   }
 
   if (template) {
-    const tb = new THREE.Box3().setFromObject(template);
-    const tSize = tb.getSize(new THREE.Vector3());
-    const tMaxAxis = Math.max(tSize.x, tSize.y, tSize.z) || 1;
-    const baseScale = 2.2 / tMaxAxis;
-    const root = new THREE.Group();
-    for (const p of positions) {
-      const inst = template.clone(true);
-      inst.position.set(p.x, p.y, p.z);
-      inst.rotation.y = p.rot;
-      inst.scale.setScalar(baseScale * p.scale);
-      inst.position.y += tSize.y * baseScale * p.scale * 0.25;
-      root.add(inst);
-    }
+    const root = instanceTemplate(template, positions, 2.2);
     scene.add(root);
     return { positions, root };
   }
 
-  // Procedural fallback
   const geo = new THREE.IcosahedronGeometry(1.2, 0);
   const mat = new THREE.MeshStandardMaterial({ color: WORLD.rockColor, roughness: 0.95, flatShading: true });
   const inst = new THREE.InstancedMesh(geo, mat, positions.length);
@@ -232,4 +198,52 @@ function scatterRocks(scene, template) {
   inst.instanceMatrix.needsUpdate = true;
   scene.add(inst);
   return { positions };
+}
+
+// Walk a GLB template (which may contain multiple meshes/materials) and emit
+// one InstancedMesh per source mesh. Each instance's matrix combines the
+// per-position transform with the source mesh's local-to-template transform.
+// This collapses N×K Object3D clones (≈ thousands of draw calls) into K
+// InstancedMesh draw calls — the single biggest perf win for foliage.
+function instanceTemplate(template, positions, targetSize) {
+  template.updateMatrixWorld(true);
+  const bbox = new THREE.Box3().setFromObject(template);
+  const size = bbox.getSize(new THREE.Vector3());
+  const maxAxis = Math.max(size.x, size.y, size.z) || 1;
+  const baseScale = targetSize / maxAxis;
+
+  // Collect (geometry, material, localMatrix-in-template-frame) per source mesh.
+  // Materials should NOT be cloned — Three.js can share them across instanced
+  // meshes; we only need separate InstancedMesh objects per geometry+material.
+  const sources = [];
+  template.traverse((o) => {
+    if (o.isMesh) {
+      sources.push({ geometry: o.geometry, material: o.material, localMatrix: o.matrixWorld.clone() });
+    }
+  });
+
+  const root = new THREE.Group();
+  const m = new THREE.Matrix4();
+  const tm = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const s = new THREE.Vector3();
+  const upAxis = new THREE.Vector3(0, 1, 0);
+
+  for (const src of sources) {
+    const im = new THREE.InstancedMesh(src.geometry, src.material, positions.length);
+    im.castShadow = false;
+    im.receiveShadow = false;
+    im.frustumCulled = true;
+    for (let i = 0; i < positions.length; i++) {
+      const p = positions[i];
+      s.setScalar(baseScale * p.scale);
+      q.setFromAxisAngle(upAxis, p.rot);
+      tm.compose(new THREE.Vector3(p.x, p.y, p.z), q, s);
+      m.multiplyMatrices(tm, src.localMatrix);
+      im.setMatrixAt(i, m);
+    }
+    im.instanceMatrix.needsUpdate = true;
+    root.add(im);
+  }
+  return root;
 }

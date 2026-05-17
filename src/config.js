@@ -5,7 +5,7 @@ export const WORLD = {
   terrainSegments: 192,      // heightmap resolution
   heightAmplitude: 36,       // base hill amplitude
   ridgeAmplitude: 18,        // secondary ridge layer
-  treeCount: 1400,
+  treeCount: 700,        // still feels dense thanks to instancing
   rockCount: 80,
   skyTop: 0x9fc6ec,
   skyBottom: 0xe2dfc8,

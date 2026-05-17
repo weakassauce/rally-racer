@@ -11,7 +11,9 @@ import { tryLoadGLB, normalizeCarModel, normalizeWheelModel } from './asset_load
 
 const app = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Cap pixel ratio at 1.5 — fillrate is already heavy with the textured terrain
+// and dense foliage, and most modern displays look fine at this DPR.
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
