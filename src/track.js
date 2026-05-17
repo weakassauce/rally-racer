@@ -92,8 +92,12 @@ export function buildTrack(scene) {
   const mat = new THREE.MeshStandardMaterial({
     map: makeDirtTexture(),
     color: 0xb19878, roughness: 0.97, metalness: 0,
+    polygonOffset: true,      // bias toward the camera so the terrain mesh
+    polygonOffsetFactor: -2,  // never z-fights / occludes the road
+    polygonOffsetUnits: -8,
   });
   const road = new THREE.Mesh(geo, mat);
+  road.renderOrder = 1;
   scene.add(road);
 
   // Gravel shoulder: a slightly wider, slightly darker mesh underneath

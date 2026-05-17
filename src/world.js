@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WORLD } from './config.js';
+import { WORLD, TRACK } from './config.js';
 
 // Shared heightmap function — used by terrain mesh, track path, vegetation.
 export function terrainHeight(x, z) {
@@ -58,7 +58,7 @@ function makeSkyTexture() {
   return t;
 }
 
-export function buildWorld(scene, { treeTemplate = null, rockTemplate = null } = {}) {
+export function buildWorld(scene, { treeTemplates = [], rockTemplate = null, track = null } = {}) {
   scene.background = makeSkyTexture();
   scene.fog = new THREE.Fog(WORLD.fogColor, WORLD.fogNear, WORLD.fogFar);
 
@@ -112,30 +112,105 @@ export function buildWorld(scene, { treeTemplate = null, rockTemplate = null } =
   const ground = new THREE.Mesh(geo, groundMat);
   scene.add(ground);
 
-  const trees = scatterTrees(scene, treeTemplate);
-  const rocks = scatterRocks(scene, rockTemplate);
+  const trees = scatterTrees(scene, treeTemplates, track);
+  const rocks = scatterRocks(scene, rockTemplate, track);
 
   return { ground, trees, rocks };
 }
 
-// Returns { instances: InstancedMesh[], positions: [{x,z,y,radius}] }
-function scatterTrees(scene, template) {
+// Sample lateral band along the track for foliage placement. Returns
+// {x, z} candidate or null if invalid.
+function bandSampleAlongTrack(track) {
+  if (!track || !track.curve) return null;
+  const t = Math.random();
+  const p = track.curve.getPointAt(t);
+  const tan = track.curve.getTangentAt(t);
+  // Lateral in XZ plane (perpendicular to tangent, normalized)
+  const lateral = new THREE.Vector2(-tan.z, tan.x);
+  const len = lateral.length() || 1;
+  lateral.x /= len;
+  lateral.y /= len;
+  const side = Math.random() < 0.5 ? -1 : 1;
+  const dist = TRACK.foliageBandInner + Math.random() * (TRACK.foliageBandOuter - TRACK.foliageBandInner);
+  return {
+    x: p.x + lateral.x * side * dist,
+    z: p.z + lateral.y * side * dist,
+  };
+}
+
+// Approximate distance from (x,z) to the nearest track waypoint.
+function distToTrack(track, x, z) {
+  if (!track || !track.points) return Infinity;
+  let best = Infinity;
+  for (const p of track.points) {
+    const dx = x - p.x, dz = z - p.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < best) best = d2;
+  }
+  return Math.sqrt(best);
+}
+
+// Returns { positions: [{x,z,y,radius,scale,rot,variant}], root }
+function scatterTrees(scene, templates, track) {
   const positions = [];
   const count = WORLD.treeCount;
   const half = WORLD.terrainSize * 0.48;
-  let placed = 0, tries = 0;
+  const minSpacing = 2.5;
+  const minSpacing2 = minSpacing * minSpacing;
+  const variantCount = Math.max(1, templates.length || 1);
+
+  function tryAdd(x, z) {
+    const y = terrainHeight(x, z);
+    if (y < -10 || y > 45) return false;
+    // Spacing check vs already-placed
+    for (const p of positions) {
+      const dx = x - p.x, dz = z - p.z;
+      if (dx * dx + dz * dz < minSpacing2) return false;
+    }
+    positions.push({
+      x, y, z,
+      scale: 0.75 + Math.random() * 1.7,
+      rot: Math.random() * Math.PI * 2,
+      radius: 1.8,
+      variant: Math.floor(Math.random() * variantCount),
+    });
+    return true;
+  }
+
+  const alongCount = Math.floor(count * TRACK.foliageAlongTrackFrac);
+  let alongPlaced = 0;
+  let alongTries = 0;
+  while (alongPlaced < alongCount && alongTries < alongCount * 8) {
+    alongTries++;
+    const s = bandSampleAlongTrack(track);
+    if (!s) break;
+    if (tryAdd(s.x, s.z)) alongPlaced++;
+  }
+
+  // Scattered fill outside the band
+  let placed = positions.length;
+  let tries = 0;
   while (placed < count && tries < count * 6) {
     tries++;
     const x = (Math.random() * 2 - 1) * half;
     const z = (Math.random() * 2 - 1) * half;
-    const y = terrainHeight(x, z);
-    if (y < -10 || y > 45) continue;
-    positions.push({ x, y, z, scale: 0.85 + Math.random() * 1.6, rot: Math.random() * Math.PI * 2, radius: 1.8 });
-    placed++;
+    if (track && distToTrack(track, x, z) < TRACK.foliageBandOuter) continue;
+    if (tryAdd(x, z)) placed = positions.length;
   }
 
-  if (template) {
-    const root = instanceTemplate(template, positions, 10);
+  const realTemplates = (templates || []).filter(Boolean);
+  if (realTemplates.length > 0) {
+    const root = new THREE.Group();
+    // Bucket positions by their assigned variant index, then instance each
+    const buckets = realTemplates.map(() => []);
+    for (const p of positions) {
+      const idx = Math.min(p.variant, realTemplates.length - 1);
+      buckets[idx].push(p);
+    }
+    realTemplates.forEach((tpl, i) => {
+      if (buckets[i].length === 0) return;
+      root.add(instanceTemplate(tpl, buckets[i], 10));
+    });
     scene.add(root);
     return { positions, root };
   }
@@ -168,15 +243,33 @@ function scatterTrees(scene, template) {
   return { positions };
 }
 
-function scatterRocks(scene, template) {
+function scatterRocks(scene, template, track) {
   const positions = [];
   const half = WORLD.terrainSize * 0.46;
-  for (let i = 0; i < WORLD.rockCount; i++) {
+  const count = WORLD.rockCount;
+  // ~60% of rocks line the track (just outside the road), the rest scattered
+  const alongCount = Math.floor(count * 0.6);
+  function placeRock(x, z) {
+    const y = terrainHeight(x, z);
+    const scale = 0.8 + Math.random() * 2.2;
+    positions.push({ x, y, z, scale, rot: Math.random() * Math.PI * 2, radius: 0.9 + scale * 0.35 });
+  }
+  for (let i = 0; i < alongCount; i++) {
+    // Rocks sit closer to road edge than trees (4-12m band)
+    const t = Math.random();
+    if (!track || !track.curve) break;
+    const p = track.curve.getPointAt(t);
+    const tan = track.curve.getTangentAt(t);
+    const latLen = Math.hypot(-tan.z, tan.x) || 1;
+    const lx = -tan.z / latLen, lz = tan.x / latLen;
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const dist = 4 + Math.random() * 8;
+    placeRock(p.x + lx * side * dist, p.z + lz * side * dist);
+  }
+  while (positions.length < count) {
     const x = (Math.random() * 2 - 1) * half;
     const z = (Math.random() * 2 - 1) * half;
-    const y = terrainHeight(x, z);
-    const scale = 1 + Math.random() * 2.4;
-    positions.push({ x, y, z, scale, rot: Math.random() * Math.PI * 2, radius: 1.0 + scale * 0.4 });
+    placeRock(x, z);
   }
 
   if (template) {

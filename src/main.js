@@ -31,10 +31,9 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
 });
 
-// World is built up-front; tree / rock GLBs are swapped in later by loading
-// the file and rebuilding the scene (cheap since terrain mesh dominates).
-let world = buildWorld(scene);
+// Track first (foliage placement bands run along it), then world.
 const track = buildTrack(scene);
+let world = buildWorld(scene, { track });
 
 // Car at start, heading along the track's initial tangent
 const carMesh = buildPlaceholderCar();
@@ -106,24 +105,23 @@ tryLoadGLB('/assets/wheel.glb').then((g) => {
   reAttachWheels();
 });
 
-// Async foliage / rock GLB swaps. When either lands we discard the current
-// scatter group and rebuild with the template. (Tree+rock counts are small
-// enough that this rebuild is fine.)
-let treeTemplate = null;
+// Async foliage / rock GLB swaps. Multiple tree variants are supported —
+// any of /assets/tree.glb, /assets/tree2.glb, /assets/tree3.glb get used.
+const treeTemplates = [];
 let rockTemplate = null;
 function rebuildScatter() {
+  // Strip current foliage roots, then rebuild with the latest templates.
   if (world.trees && world.trees.root) scene.remove(world.trees.root);
   if (world.rocks && world.rocks.root) scene.remove(world.rocks.root);
-  // For procedural fallback the trees/rocks aren't in a tagged root, but we
-  // also already scattered them once; rebuilding always for simplicity.
-  // (The terrain mesh and lights stay.)
-  // Re-run scatter only — terrain etc. already in scene from initial buildWorld.
-  // Easiest: leave initial procedural scatter alone if template is null;
-  // otherwise we add the GLB scatter on top and leave the procedural as a
-  // fallback layer (they're cheap relative to the GLBs).
-  world = buildWorld(scene, { treeTemplate, rockTemplate });
+  world = buildWorld(scene, { treeTemplates, rockTemplate, track });
 }
-tryLoadGLB('/assets/tree.glb').then((g) => { if (g) { treeTemplate = normalizeFoliage(g, 'tree'); rebuildScatter(); } });
+for (const url of ['/assets/tree.glb', '/assets/tree2.glb', '/assets/tree3.glb']) {
+  tryLoadGLB(url).then((g) => {
+    if (!g) return;
+    treeTemplates.push(normalizeFoliage(g, 'tree'));
+    rebuildScatter();
+  });
+}
 tryLoadGLB('/assets/rock.glb').then((g) => { if (g) { rockTemplate = normalizeFoliage(g, 'rock'); rebuildScatter(); } });
 
 function normalizeFoliage(root, kind) {

@@ -5,8 +5,8 @@ export const WORLD = {
   terrainSegments: 192,      // heightmap resolution
   heightAmplitude: 36,       // base hill amplitude
   ridgeAmplitude: 18,        // secondary ridge layer
-  treeCount: 700,        // still feels dense thanks to instancing
-  rockCount: 80,
+  treeCount: 1200,       // dense forest lining the track
+  rockCount: 180,
   skyTop: 0x9fc6ec,
   skyBottom: 0xe2dfc8,
   fogColor: 0xcadbc0,
@@ -59,8 +59,14 @@ export const TRACK = {
   ],
   finishRadius: 12,          // distance to last waypoint to trigger finish
   checkpointEvery: 4,        // every Nth waypoint is a checkpoint marker
-  surfaceLift: 0.18,         // road sits this many meters above the terrain
+  surfaceLift: 0.55,         // road sits this many meters above the terrain
   bankWidth: 1.4,            // gravel shoulder past asphalt edge
+  // Trees and rocks pack into a band this wide alongside the road. The band
+  // starts `inner` meters from the centerline (so the road itself is clear)
+  // and extends out `outer` meters before density drops off.
+  foliageBandInner: 8,
+  foliageBandOuter: 38,
+  foliageAlongTrackFrac: 0.75, // 75% of foliage is band-placed, rest is scattered
 };
 
 export const CAR = {
