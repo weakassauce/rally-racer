@@ -194,9 +194,14 @@ export class Car {
     const yB = terrainHeight(xB, zB);
     const yR = terrainHeight(xR, zR);
     const yL = terrainHeight(xL, zL);
-    // Pitch around right axis: front goes up = positive pitch (nose up)
-    const pitch = Math.atan2(yB - yF, halfLen * 2);
-    // Roll around forward axis: right side up = positive roll
+    // Pitch around the car's right axis. With mesh.rotation.order = 'YXZ',
+    // positive X rotation tilts -Z (forward) toward +Y → nose UP. So when
+    // the terrain in front (yF) is higher than behind (yB), pitch must be
+    // positive. (The previous sign was inverted — uphills tilted the nose
+    // down.)
+    const pitch = Math.atan2(yF - yB, halfLen * 2);
+    // Roll around the car's forward axis. Positive roll leans the top to
+    // the left (-X), which is correct when the right side is higher.
     const roll  = Math.atan2(yR - yL, halfWid * 2);
 
     // Smooth so the body doesn't snap on crests; blend toward instantaneous

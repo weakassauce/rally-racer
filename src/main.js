@@ -48,8 +48,9 @@ function spawnAtStart() {
 }
 spawnAtStart();
 
-// WRX-ish proportions: track ~1.46/1.78 ≈ 0.41, wheelbase ~2.62/4.6 ≈ 0.285
-const wheelTune = { lateral: 0.41, longitudinal: 0.285, diameter: 0.66, yLift: -0.02 };
+// Defaults sit wheels well inside the body — narrower cars need ~0.32 lateral
+// so the wheel's outer edge doesn't poke through the fender.
+const wheelTune = { lateral: 0.32, longitudinal: 0.285, diameter: 0.62, yLift: -0.04 };
 window.wheelTune = wheelTune;
 window.applyWheels = () => reAttachWheels();
 let wheelTemplateGLB = null;
